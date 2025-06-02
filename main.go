@@ -245,8 +245,8 @@ func (m model) View() string {
 	if !m.serverReady {
 		s.WriteString(fmt.Sprintf("%s Initializing server...", m.spinner.View()))
 	} else {
-		s.WriteString(styleSuccess.Render("Server Ready! ✨"))
-		s.WriteString("\nListening on:\n")
+		s.WriteString(styleSuccess.Render("Server Ready! ✨\n"))
+		s.WriteString("Listening on:\n")
 		urls := strings.Split(m.servingURL, "\n")
 		for _, url := range urls {
 			if url != "" {
@@ -552,21 +552,18 @@ A cute and simple file server that serves files once or to a limited number of c
 
 Usage:
   cutie-serve [options] <file>
+  cutie-serve [options] --file <file>
 
 Examples:
-  cutie-serve document.pdf                      # Serve once to first downloader
-  cutie-serve -n 3 photo.jpg                    # Serve to first 3 unique IPs
-  cutie-serve --port 8080 video.mp4             # Serve on specific port
-  cutie-serve --ips "192.168.1.10,192.168.1.20" file.zip  # Only allow specific IPs
+  cutie-serve document.pdf                    # Serve once to first downloader
+  cutie-serve -n 3 photo.jpg                  # Serve to first 3 unique IPs
+  cutie-serve -port 8080 video.mp4           # Serve on specific port
+  cutie-serve -ips "192.168.1.10,192.168.1.20" file.zip  # Only allow specific IPs
 
 Options:
-  -h, --help                Show help message
-  -v, --version             Show version information
-  -n <number>               Number of downloads allowed (1 = serve once, >1 = serve to N unique IPs) (default: 1)
-  --port <number>           Port to listen on (0 for random available port) (default: 0)
-  --ips <ip1,ip2,...>       Comma-separated list of specific IPs allowed to connect
-
 `, version)
+	flag.PrintDefaults()
+	fmt.Println()
 }
 
 func printVersion() {

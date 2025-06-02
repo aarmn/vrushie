@@ -43,7 +43,7 @@ cutie-serve --version   # Version info
 | `--help` | `-h` | Show help message | - |
 | `--version` | `-v` | Show version information | - |
 | `--port` | - | Port to listen on (0 for random) | `0` |
-| `-n` | - | Number of downloads allowed | `1` |
+| `--n` | `-n` | Number of downloads allowed | `1` |
 | `--ips` | - | Comma-separated list of allowed IPs | - |
 
 ## 🎯 Usage Examples
@@ -116,7 +116,7 @@ When you run Cutie Serve, you'll see a beautiful terminal interface like this:
 
 ### Build from Source
 ```bash
-git clone https://github.com/your-username/cutie-serve
+git clone https://github.com/aarmn/cutie-serve
 cd cutie-serve
 go build -o cutie-serve
 ```
