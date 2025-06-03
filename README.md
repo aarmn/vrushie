@@ -78,9 +78,9 @@ When you run vrushie server, you'll see a beautiful terminal interface like this
 
 ```
 ╭──────────────────────────────────────────────────────────────╮
-│🌸 Vrushie Server 🌸                                            │
+│🌸 Vrushie Server 🌸                                         │
 │                                                              │
-│Serving File: vrushie.exe                                 │
+│Serving File: vrushie.exe                                     │
 │Size: 9.2 MiB                                                 │
 │                                                              │
 │Server Ready! ✨✨                                           │
