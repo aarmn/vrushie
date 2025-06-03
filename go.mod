@@ -1,4 +1,4 @@
-module cutie-serve
+module vrushie
 
 go 1.23.3
 

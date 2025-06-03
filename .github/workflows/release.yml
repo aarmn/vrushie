@@ -34,15 +34,15 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
         run: |
-          OUTPUT_NAME=cutie-serve
+          OUTPUT_NAME=vrushie
           if [ "${{ matrix.os }}" = "windows" ]; then
-            OUTPUT_NAME=cutie-serve.exe
+            OUTPUT_NAME=vrushie.exe
           fi
-          go build -v -o "cutie-serve-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }}"
+          go build -v -o "vrushie-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }}"
 
       - name: Upload binary to release
         uses: softprops/action-gh-release@v1
         with:
-          files: gh-cutie-serve-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }}
+          files: vrushie-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

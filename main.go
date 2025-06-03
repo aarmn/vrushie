@@ -233,7 +233,7 @@ func (m model) View() string {
 	var s strings.Builder
 
 	// Header
-	s.WriteString(stylePrimary.Render("🌸 Cutie Serve 🌸"))
+	s.WriteString(stylePrimary.Render("🌸 Vrushie Server 🌸"))
 	s.WriteString("\n\n")
 
 	// File Info
@@ -546,19 +546,19 @@ func contains(slice []string, item string) bool {
 // --- Helper Functions for CLI ---
 
 func printUsage() {
-	fmt.Printf(`🌸 Cutie Serve %s 🌸
+	fmt.Printf(`🌸 Vrushie Server %s 🌸
 
 A cute and simple file server that serves files once or to a limited number of clients.
 
 Usage:
-  cutie-serve [options] <file>
-  cutie-serve [options] --file <file>
+  vrushie [options] <file>
+  vrushie [options] --file <file>
 
 Examples:
-  cutie-serve document.pdf                    # Serve once to first downloader
-  cutie-serve -n 3 photo.jpg                  # Serve to first 3 unique IPs
-  cutie-serve -port 8080 video.mp4           # Serve on specific port
-  cutie-serve -ips "192.168.1.10,192.168.1.20" file.zip  # Only allow specific IPs
+  vrushie document.pdf                    # Serve once to first downloader
+  vrushie -n 3 photo.jpg                  # Serve to first 3 unique IPs
+  vrushie -port 8080 video.mp4           # Serve on specific port
+  vrushie -ips "192.168.1.10,192.168.1.20" file.zip  # Only allow specific IPs
 
 Options:
 `, version)
@@ -567,7 +567,7 @@ Options:
 }
 
 func printVersion() {
-	fmt.Printf("🌸 Cutie Serve v%s 🌸\n", version)
+	fmt.Printf("🌸 Vrushie Server v%s 🌸\n", version)
 }
 
 func getFilePath() (string, error) {
@@ -604,8 +604,8 @@ func main() {
 	filePath, err := getFilePath()
 	if err != nil {
 		fmt.Println(styleError.Render("❌ Error: No file specified"))
-		fmt.Println(styleSubtle.Render("\nUsage: cutie-serve [options] <file>"))
-		fmt.Println(styleSubtle.Render("Try 'cutie-serve --help' for more information."))
+		fmt.Println(styleSubtle.Render("\nUsage: vrushie [options] <file>"))
+		fmt.Println(styleSubtle.Render("Try 'vrushie --help' for more information."))
 		os.Exit(1)
 	}
 
