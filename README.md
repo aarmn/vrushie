@@ -151,6 +151,13 @@ Vrushie automatically detects all available network interfaces and displays URLs
 - Custom: Specify with `-port <number>`
 - Displays actual port in the interface
 
+## ✅ Todo
+
+- [ ] Add multiple file hosting, and to pack as tar, zip, ... (also for folders)
+- [ ] Share on specific IPs and interactive select endpoints
+- [ ] Ensure When its ends
+- [ ] Show the progress of download if possible
+
 ## 🤝 Contributing
 
 We love contributions! Here's how you can help make Vrushie even cuter:
