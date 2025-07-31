@@ -1,6 +1,9 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
 	"errors"
 	"flag"
@@ -19,9 +22,10 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
-const version = "1.0.2"
+const version = "1.1.0"
 
 // --- Configuration ---
 var (
@@ -32,6 +36,8 @@ var (
 	showHelpLong    = flag.Bool("help", false, "Show help message")
 	showVersion     = flag.Bool("v", false, "Show version information")
 	showVersionLong = flag.Bool("version", false, "Show version information")
+	zipMode         = flag.Bool("z", false, "Serve multiple files or a directory as a single archive")
+	archiveFormat   = flag.String("format", "zip", "Archive format to use (zip or tar.gz)")
 )
 
 // --- TUI Styles ---
@@ -61,7 +67,9 @@ type model struct {
 	activityChan   chan activityLog // Channel for logging access attempts/downloads
 	serverReady    bool
 	servingURL     string
-	filePath       string
+	publicIP       string
+	qrCode         string
+	paths          []string
 	fileName       string
 	fileSize       int64
 	accessMode     string
@@ -87,38 +95,45 @@ type activityLog struct {
 
 // --- TUI Messages ---
 
-type serverReadyMsg struct{ url string }
+type serverReadyMsg struct {
+	url      string
+	publicIP string
+}
 type serverErrMsg struct{ err error }
 type activityMsg struct{ log activityLog }
 type shutdownMsg struct{} // Message to initiate shutdown
 
 // --- Bubbletea Implementation ---
 
-func initialModel(filePath string) model {
+func initialModel(paths []string) model {
 	s := spinner.New()
-	s.Spinner = spinner.Dot // Or choose another cute one: Line, Jump, Pulse, Points, Globe, Moon, Monkey
+	s.Spinner = spinner.Dot
 	s.Style = styleSpinner
 
 	m := model{
 		spinner:        s,
 		shutdownChan:   make(chan struct{}),
-		errChan:        make(chan error, 1),        // Buffered to prevent blocking
-		activityChan:   make(chan activityLog, 10), // Buffered channel for activities
+		errChan:        make(chan error, 1),
+		activityChan:   make(chan activityLog, 10),
 		serverReady:    false,
-		filePath:       filePath,
-		fileName:       filepath.Base(filePath),
+		paths:          paths,
 		limitN:         *limitN,
 		specificIPs:    make(map[string]struct{}),
 		allowedFirstN:  make(map[string]struct{}),
-		maxActivityLog: 10, // Keep last 10 activities
+		maxActivityLog: 10,
 		activity:       make([]activityLog, 0, 10),
 	}
 
-	// Determine File Size
-	info, err := os.Stat(filePath)
-	if err == nil {
-		m.fileSize = info.Size()
-	} // Error handled later in main
+	if *zipMode {
+		m.fileName = "archive." + strings.ToLower(*archiveFormat)
+		m.fileSize = -1 // Use -1 to indicate size is unknown/dynamic
+	} else {
+		m.fileName = filepath.Base(paths[0])
+		info, err := os.Stat(paths[0])
+		if err == nil {
+			m.fileSize = info.Size()
+		}
+	}
 
 	// Parse specific IPs if provided
 	if *allowedIPs != "" {
@@ -142,11 +157,11 @@ func initialModel(filePath string) model {
 	return m
 }
 
-func (m model) Init() tea.Cmd {
+func (m *model) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, m.startServer())
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -173,6 +188,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case serverReadyMsg:
 		m.serverReady = true
 		m.servingURL = msg.url
+		m.publicIP = msg.publicIP
+
+		// Generate QR code if we have a public IP
+		if m.publicIP != "" {
+			port := m.listener.Addr().(*net.TCPAddr).Port
+			publicURL := fmt.Sprintf("http://%s:%d/", m.publicIP, port)
+			qr, err := generateQRCode(publicURL)
+			if err != nil {
+				log.Printf("QR code generation failed: %v", err)
+				// Don't crash, just won't show QR
+			} else {
+				m.qrCode = qr
+			}
+		}
 		return m, nil
 
 	case serverErrMsg:
@@ -222,7 +251,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
+func (m *model) View() string {
 	if m.quitting && m.lastError == nil {
 		return styleSuccess.Render("\nServer shut down gracefully. Bye! ♡\n\n")
 	}
@@ -230,40 +259,45 @@ func (m model) View() string {
 		return styleError.Render(fmt.Sprintf("\nServer Error: %v\n\n", m.lastError))
 	}
 
-	var s strings.Builder
-
-	// Header
-	s.WriteString(stylePrimary.Render("🌸 Vrushie Server 🌸"))
-	s.WriteString("\n\n")
-
-	// File Info
-	s.WriteString(fmt.Sprintf("Serving File: %s\n", styleSecondary.Render(m.fileName)))
-	s.WriteString(fmt.Sprintf("Size: %s\n", styleSubtle.Render(formatBytes(m.fileSize))))
-	s.WriteString("\n")
-
-	// Server Status
-	if !m.serverReady {
-		s.WriteString(fmt.Sprintf("%s Initializing server...", m.spinner.View()))
+	// --- Left Panel (Main Info) ---
+	var leftPanel strings.Builder
+	leftPanel.WriteString(stylePrimary.Render("🌸 Vrushie Server 🌸"))
+	leftPanel.WriteString("\n\n")
+	if *zipMode {
+		leftPanel.WriteString(fmt.Sprintf("Serving Archive: %s\n", styleSecondary.Render(m.fileName)))
+		leftPanel.WriteString(fmt.Sprintf("Contents: %s\n", styleSubtle.Render(strings.Join(m.paths, ", "))))
 	} else {
-		s.WriteString(styleSuccess.Render("Server Ready! ✨\n"))
-		s.WriteString("Listening on:\n")
+		leftPanel.WriteString(fmt.Sprintf("Serving File: %s\n", styleSecondary.Render(m.fileName)))
+		if m.fileSize >= 0 {
+			leftPanel.WriteString(fmt.Sprintf("Size: %s\n", styleSubtle.Render(formatBytes(m.fileSize))))
+		}
+	}
+	leftPanel.WriteString("\n")
+
+	if !m.serverReady {
+		leftPanel.WriteString(fmt.Sprintf("%s Initializing server...", m.spinner.View()))
+	} else {
+		leftPanel.WriteString(styleSuccess.Render("Server Ready! ✨\n"))
+		leftPanel.WriteString("Listening on:\n")
 		urls := strings.Split(m.servingURL, "\n")
 		for _, url := range urls {
 			if url != "" {
-				s.WriteString(fmt.Sprintf("  %s\n", styleURL.Render(url)))
+				if m.publicIP != "" && strings.Contains(url, m.publicIP) {
+					leftPanel.WriteString(fmt.Sprintf("🌐 %s\n", styleURL.Render(url)))
+				} else {
+					leftPanel.WriteString(fmt.Sprintf("   %s\n", styleURL.Render(url)))
+				}
 			}
 		}
 	}
-	s.WriteString("\n")
-
-	// Access Mode
-	s.WriteString(fmt.Sprintf("Access Mode: %s\n", stylePrimary.Render(m.accessMode)))
+	leftPanel.WriteString("\n")
+	leftPanel.WriteString(fmt.Sprintf("Access Mode: %s\n", stylePrimary.Render(m.accessMode)))
 	if len(m.specificIPs) > 0 {
 		var ips []string
 		for ip := range m.specificIPs {
 			ips = append(ips, ip)
 		}
-		s.WriteString(fmt.Sprintf("Allowed IPs: %s\n", styleSubtle.Render(strings.Join(ips, ", "))))
+		leftPanel.WriteString(fmt.Sprintf("Allowed IPs: %s\n", styleSubtle.Render(strings.Join(ips, ", "))))
 	} else if m.limitN > 1 {
 		m.ipLock.Lock()
 		var ips []string
@@ -275,39 +309,65 @@ func (m model) View() string {
 			status += ": " + strings.Join(ips, ", ")
 		}
 		m.ipLock.Unlock()
-		s.WriteString(fmt.Sprintf("First %d IPs: %s\n", m.limitN, styleSubtle.Render(status)))
+		leftPanel.WriteString(fmt.Sprintf("First %d IPs: %s\n", m.limitN, styleSubtle.Render(status)))
 	}
-	s.WriteString("\n")
-
-	// Activity Log
-	s.WriteString("Activity Log:\n")
+	leftPanel.WriteString("\n")
+	leftPanel.WriteString("Activity Log:\n")
 	if len(m.activity) == 0 {
-		s.WriteString(styleSubtle.Render("  No activity yet...\n"))
+		leftPanel.WriteString(styleSubtle.Render("  No activity yet...\n"))
 	} else {
-		// Display in reverse chronological order (newest first)
 		for i := len(m.activity) - 1; i >= 0; i-- {
 			logEntry := m.activity[i]
 			ts := logEntry.Timestamp.Format("15:04:05")
-			s.WriteString(fmt.Sprintf("  %s [%s] %s\n",
+			leftPanel.WriteString(fmt.Sprintf("  %s [%s] %s\n",
 				styleSubtle.Render(ts),
 				logEntry.Style.Render(logEntry.IP),
 				logEntry.Action,
 			))
 		}
 	}
+	leftPanelStr := leftPanel.String()
 
-	// Footer/Instructions
-	if !m.quitting {
-		s.WriteString(styleInstructions.Render("\nPress 'q' or Ctrl+C to shut down manually."))
-	} else {
-		s.WriteString(styleInstructions.Render("\nShutting down..."))
+	// --- Right Panel (QR Code) ---
+	rightPanelStr := ""
+	if m.qrCode != "" {
+		qrStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder(), true).
+			BorderForeground(stylePrimary.GetForeground()).
+			Padding(1)
+		rightPanelStr = qrStyle.Render(m.qrCode)
 	}
 
-	// Apply border and padding
-	return styleBorder.Render(s.String())
+	// --- Combine Panels ---
+	mainContent := leftPanelStr
+	// Check if there's enough space for a side-by-side layout
+	if rightPanelStr != "" && lipgloss.Width(leftPanelStr)+lipgloss.Width(rightPanelStr) < m.width {
+		mainContent = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelStr, rightPanelStr)
+	}
+
+	// --- Footer ---
+	var footer strings.Builder
+	if !m.quitting {
+		footer.WriteString(styleInstructions.Render("\nPress 'q' or Ctrl+C to shut down manually."))
+	} else {
+		footer.WriteString(styleInstructions.Render("\nShutting down..."))
+	}
+
+	// Apply final border
+	return styleBorder.Render(lipgloss.JoinVertical(lipgloss.Left, mainContent, footer.String()))
 }
 
 // --- Helper Functions ---
+
+func generateQRCode(url string) (string, error) {
+	// Generate a QR code, then convert it to a small ASCII string
+	// The `false` parameter creates a denser QR code, better for terminals
+	qr, err := qrcode.New(url, qrcode.Medium)
+	if err != nil {
+		return "", fmt.Errorf("could not generate QR code: %w", err)
+	}
+	return qr.ToSmallString(false), nil
+}
 
 func formatBytes(b int64) string {
 	const unit = 1024
@@ -359,6 +419,47 @@ func getOutboundIPs() []string {
 	return ips
 }
 
+// getPublicIP attempts to retrieve the public IP from a list of services.
+func getPublicIP() (string, error) {
+	services := []string{
+		"https://api.ipify.org",
+		"https://ifconfig.me/ip",
+		"https://icanhazip.com",
+		"https://ident.me",
+	}
+
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+
+	for _, service := range services {
+		resp, err := client.Get(service)
+		if err != nil {
+			log.Printf("Failed to get public IP from %s: %v", service, err)
+			continue // Try next service
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("Service %s returned non-200 status: %d", service, resp.StatusCode)
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("Failed to read response body from %s: %v", service, err)
+			continue
+		}
+
+		ipStr := strings.TrimSpace(string(body))
+		if net.ParseIP(ipStr) != nil {
+			return ipStr, nil // Success
+		}
+	}
+
+	return "", fmt.Errorf("all public IP services failed")
+}
+
 // --- Server Logic ---
 
 // startServer is a tea.Cmd that starts the HTTP server in a goroutine
@@ -375,13 +476,28 @@ func (m *model) startServer() tea.Cmd {
 		actualPort := listener.Addr().(*net.TCPAddr).Port
 
 		// Determine server URLs
+		publicIP, err := getPublicIP()
+		if err != nil {
+			log.Printf("Could not retrieve public IP: %v", err) // Log error for debugging
+		}
+
 		ips := getOutboundIPs()
 		var urlBuilder strings.Builder
+
+		// Prepend public IP if available
+		if publicIP != "" {
+			urlBuilder.WriteString(fmt.Sprintf("http://%s:%d/\n", publicIP, actualPort))
+		}
+
 		for _, ip := range ips {
+			// Avoid duplicating the public IP if it's also found as a local IP
+			if ip == publicIP {
+				continue
+			}
 			urlBuilder.WriteString(fmt.Sprintf("http://%s:%d/\n", ip, actualPort))
 		}
 		// Always include localhost
-		if !contains(ips, "127.0.0.1") {
+		if !contains(ips, "127.0.0.1") && publicIP != "127.0.0.1" {
 			urlBuilder.WriteString(fmt.Sprintf("http://127.0.0.1:%d/\n", actualPort))
 		}
 		serverURL := strings.TrimSpace(urlBuilder.String())
@@ -391,35 +507,30 @@ func (m *model) startServer() tea.Cmd {
 		mux.HandleFunc("/", m.fileHandler) // Pass model method
 		m.server = &http.Server{
 			Handler: mux,
-			// Add timeouts for robustness? e.g., ReadTimeout, WriteTimeout
 		}
 
 		// Start server in a goroutine
 		go func() {
 			<-m.shutdownChan // Wait for shutdown signal
 			log.Println("Shutdown signal received, stopping server...")
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // Graceful shutdown timeout
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // Graceful shutdown timeout
 			defer cancel()
 			if err := m.server.Shutdown(ctx); err != nil {
-				// Send error back to main loop if shutdown fails
 				m.errChan <- fmt.Errorf("server shutdown failed: %w", err)
-			} else {
-				log.Println("Server stopped gracefully.")
 			}
 			close(m.errChan) // Signal that shutdown goroutine is done
 		}()
 
-		// Start listening in another goroutine, send errors back via channel
+		// Start listening in another goroutine
 		go func() {
 			log.Printf("Server starting on port %d...", actualPort)
 			if err := m.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				m.errChan <- fmt.Errorf("server failed: %w", err)
 			}
-			log.Println("Server Serve() function finished.")
 		}()
 
 		// Report server ready via message
-		return serverReadyMsg{url: serverURL}
+		return serverReadyMsg{url: serverURL, publicIP: publicIP}
 	}
 }
 
@@ -437,100 +548,194 @@ func (m *model) waitForShutdown() tea.Cmd {
 
 // fileHandler is the HTTP handler function
 func (m *model) fileHandler(w http.ResponseWriter, r *http.Request) {
-	// Get client IP (handle potential proxies later if needed)
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		ip = r.RemoteAddr // Fallback if split fails
+		ip = r.RemoteAddr // Fallback
 	}
 
-	m.ipLock.Lock()
-	isAllowed := false
-	reason := "Access denied"
-
-	if len(m.specificIPs) > 0 {
-		// Mode 1: Specific IPs
-		if _, ok := m.specificIPs[ip]; ok {
-			isAllowed = true
-		} else {
-			reason = "IP not in allowed list"
-		}
-	} else if m.limitN > 1 {
-		// Mode 2: First N unique IPs
-		if _, ok := m.allowedFirstN[ip]; ok {
-			// Already seen and allowed
-			isAllowed = true
-		} else if len(m.allowedFirstN) < m.limitN {
-			// New IP within limit, allow and add
-			m.allowedFirstN[ip] = struct{}{}
-			isAllowed = true
-		} else {
-			reason = fmt.Sprintf("Limit of %d unique IPs reached", m.limitN)
-		}
-	} else {
-		// Mode 3: Serve once (limitN == 1) - Allow first connection attempt
-		isAllowed = true
-	}
-
-	// Check if download limit is already reached (even if IP is allowed)
-	// This handles the N > 1 case where an allowed IP tries after N downloads finished
-	if isAllowed && m.limitN > 1 && m.downloadCount >= m.limitN {
-		isAllowed = false
-		reason = fmt.Sprintf("Download limit of %d already reached", m.limitN)
-	}
-	// This handles the serve-once case after the first download finished
-	if isAllowed && m.limitN == 1 && m.downloadCount > 0 {
-		isAllowed = false
-		reason = "File has already been downloaded"
-	}
-
-	m.ipLock.Unlock() // Release lock before logging and serving
-
-	// Log activity and potentially reject
-	if !isAllowed {
+	if !m.isRequestAllowed(ip) {
+		reason := "Access denied" // Generic reason, specific reasons are internal
 		logMsg := activityLog{Timestamp: time.Now(), IP: ip, Action: fmt.Sprintf("Rejected: %s", reason), Style: styleIPRejected}
-		m.activityChan <- logMsg // Send to TUI via channel
+		m.activityChan <- logMsg
 		http.Error(w, reason, http.StatusForbidden)
 		return
 	}
 
-	// Log allowed connection attempt
 	logMsg := activityLog{Timestamp: time.Now(), IP: ip, Action: "Connected & Allowed", Style: styleIPAllowed}
 	m.activityChan <- logMsg
 
-	// --- Serve the file ---
-	file, err := os.Open(m.filePath)
-	if err != nil {
-		errMsg := activityLog{Timestamp: time.Now(), IP: ip, Action: fmt.Sprintf("Error opening file: %s", err), Style: styleError}
-		m.activityChan <- errMsg
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+	var copyErr error
+	if *zipMode {
+		// --- Archive Mode ---
+		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(m.fileName))
+		format := strings.ToLower(*archiveFormat)
+		if format == "zip" {
+			w.Header().Set("Content-Type", "application/zip")
+			copyErr = m.streamZip(w)
+		} else if format == "tar.gz" {
+			w.Header().Set("Content-Type", "application/x-gzip")
+			copyErr = m.streamTarGz(w)
+		}
+	} else {
+		// --- Single File Mode ---
+		file, err := os.Open(m.paths[0])
+		if err != nil {
+			errMsg := activityLog{Timestamp: time.Now(), IP: ip, Action: fmt.Sprintf("Error opening file: %s", err), Style: styleError}
+			m.activityChan <- errMsg
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+
+		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(m.fileName))
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.FormatInt(m.fileSize, 10))
+		_, copyErr = io.Copy(w, file)
 	}
-	defer file.Close()
 
-	// Set headers for download
-	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(m.fileName))
-	w.Header().Set("Content-Type", "application/octet-stream") // Generic byte stream
-	w.Header().Set("Content-Length", strconv.FormatInt(m.fileSize, 10))
-
-	// Use ServeContent for efficiency (handles Range requests etc.)
-	// http.ServeContent(w, r, m.fileName, time.Time{}, file) // Simpler version
-
-	// Or io.Copy for explicit control/error checking (though ServeContent is usually better)
-	_, copyErr := io.Copy(w, file)
-
-	// Check if the copy was successful *from the server's perspective*
-	// This doesn't perfectly guarantee the client got everything, but it's the best we can easily do.
 	if copyErr == nil {
-		// Log successful download completion
 		successMsg := activityLog{Timestamp: time.Now(), IP: ip, Action: "Download Complete", Style: styleSuccess}
-		// Send via channel - this will trigger the Update logic to check shutdown condition
 		m.activityChan <- successMsg
 	} else {
-		// Log potential error during transfer
 		errMsg := activityLog{Timestamp: time.Now(), IP: ip, Action: fmt.Sprintf("Error during transfer: %s", copyErr), Style: styleError}
 		m.activityChan <- errMsg
-		// Don't explicitly trigger shutdown on transfer error
 	}
+}
+
+// isRequestAllowed checks if an incoming request from a given IP is allowed based on the access rules.
+func (m *model) isRequestAllowed(ip string) bool {
+	m.ipLock.Lock()
+	defer m.ipLock.Unlock()
+
+	isAllowed := false
+	if len(m.specificIPs) > 0 {
+		// Mode 1: Specific IPs
+		if _, ok := m.specificIPs[ip]; ok {
+			isAllowed = true
+		}
+	} else if m.limitN > 1 {
+		// Mode 2: First N unique IPs
+		if _, ok := m.allowedFirstN[ip]; ok {
+			isAllowed = true
+		} else if len(m.allowedFirstN) < m.limitN {
+			m.allowedFirstN[ip] = struct{}{}
+			isAllowed = true
+		}
+	} else {
+		// Mode 3: Serve once (limitN == 1)
+		isAllowed = true
+	}
+
+	// Final checks for download counts
+	if isAllowed && m.limitN > 1 && m.downloadCount >= m.limitN {
+		isAllowed = false
+	}
+	if isAllowed && m.limitN == 1 && m.downloadCount > 0 {
+		isAllowed = false
+	}
+
+	return isAllowed
+}
+
+// streamZip creates a zip archive on-the-fly and streams it to the ResponseWriter.
+func (m *model) streamZip(w http.ResponseWriter) error {
+	zipWriter := zip.NewWriter(w)
+	defer zipWriter.Close()
+
+	for _, path := range m.paths {
+		err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil // Skip directories
+			}
+
+			// Create a proper zip header
+			header, err := zip.FileInfoHeader(info)
+			if err != nil {
+				return err
+			}
+			header.Name, err = filepath.Rel(filepath.Dir(path), filePath)
+			if err != nil {
+				return err
+			}
+			header.Method = zip.Deflate
+
+			// Create a writer for the file in the zip
+			writer, err := zipWriter.CreateHeader(header)
+			if err != nil {
+				return err
+			}
+
+			// Open the original file
+			file, err := os.Open(filePath)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			// Copy the file content to the zip writer
+			_, err = io.Copy(writer, file)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// streamTarGz creates a tar.gz archive on-the-fly and streams it.
+func (m *model) streamTarGz(w http.ResponseWriter) error {
+	gzipWriter := gzip.NewWriter(w)
+	defer gzipWriter.Close()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+
+	for _, path := range m.paths {
+		err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+
+			// Create a proper tar header
+			header, err := tar.FileInfoHeader(info, info.Name())
+			if err != nil {
+				return err
+			}
+			header.Name, err = filepath.Rel(filepath.Dir(path), filePath)
+			if err != nil {
+				return err
+			}
+
+			// Write the header
+			if err := tarWriter.WriteHeader(header); err != nil {
+				return err
+			}
+
+			// If it's a directory, we're done with this entry
+			if info.IsDir() {
+				return nil
+			}
+
+			// Open the original file
+			file, err := os.Open(filePath)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			// Copy the file content to the tar writer
+			_, err = io.Copy(tarWriter, file)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // contains checks if a string slice contains a specific string.
@@ -555,10 +760,11 @@ Usage:
   vrushie [options] --file <file>
 
 Examples:
-  vrushie document.pdf                    # Serve once to first downloader
-  vrushie -n 3 photo.jpg                  # Serve to first 3 unique IPs
-  vrushie -port 8080 video.mp4           # Serve on specific port
-  vrushie -ips "192.168.1.10,192.168.1.20" file.zip  # Only allow specific IPs
+  vrushie document.pdf                           # Serve a single file once
+  vrushie -n 3 photo.jpg                         # Serve to the first 3 unique IPs
+  vrushie -z my_folder/                        # Serve a whole folder as a .zip archive
+  vrushie -z --format tar.gz file1.txt file2.txt # Serve multiple files as a .tar.gz
+  vrushie -ips "192.168.1.10" secret.zip         # Only allow a specific IP
 
 Options:
 `, version)
@@ -570,16 +776,19 @@ func printVersion() {
 	fmt.Printf("🌸 Vrushie Server v%s 🌸\n", version)
 }
 
-func getFilePath() (string, error) {
+func getTargetPaths() ([]string, error) {
 	args := flag.Args()
 
-	// Check if file provided as positional argument
-	if len(args) > 0 {
-		return args[0], nil
+	if len(args) == 0 {
+		return nil, fmt.Errorf("no file or directory specified")
 	}
 
-	// If no positional argument, show error with helpful message
-	return "", fmt.Errorf("no file specified")
+	// In single-file mode, we only take one argument
+	if !*zipMode && len(args) > 1 {
+		return nil, fmt.Errorf("too many arguments for single file mode; use -z to serve multiple files as an archive")
+	}
+
+	return args, nil
 }
 
 // --- Main Function ---
@@ -589,45 +798,49 @@ func main() {
 	flag.Usage = printUsage
 	flag.Parse()
 
-	// Handle help and version flags
 	if *showHelp || *showHelpLong {
 		printUsage()
 		os.Exit(0)
 	}
-
 	if *showVersion || *showVersionLong {
 		printVersion()
 		os.Exit(0)
 	}
 
-	// --- Get file path ---
-	filePath, err := getFilePath()
+	// --- Get file/dir paths ---
+	paths, err := getTargetPaths()
 	if err != nil {
-		fmt.Println(styleError.Render("❌ Error: No file specified"))
-		fmt.Println(styleSubtle.Render("\nUsage: vrushie [options] <file>"))
+		fmt.Println(styleError.Render(fmt.Sprintf("❌ Error: %s", err)))
+		fmt.Println(styleSubtle.Render("\nUsage: vrushie [options] <file_or_dir...>"))
 		fmt.Println(styleSubtle.Render("Try 'vrushie --help' for more information."))
 		os.Exit(1)
 	}
 
 	// --- Input Validation ---
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		fmt.Println(styleError.Render(fmt.Sprintf("❌ Error: File not found: %s", filePath)))
-		os.Exit(1)
+	for _, path := range paths {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			fmt.Println(styleError.Render(fmt.Sprintf("❌ Error: File or directory not found: %s", path)))
+			os.Exit(1)
+		}
+	}
+	if *zipMode {
+		format := strings.ToLower(*archiveFormat)
+		if format != "zip" && format != "tar.gz" {
+			fmt.Println(styleError.Render(fmt.Sprintf("❌ Error: Invalid archive format '%s'. Must be 'zip' or 'tar.gz'.", *archiveFormat)))
+			os.Exit(1)
+		}
 	}
 	if *limitN < 1 && *allowedIPs == "" {
-		// If -n is 0 or less, and no specific IPs are given, default to serve-once.
 		fmt.Println(styleSubtle.Render("⚠️  Warning: -n must be 1 or greater. Defaulting to serve-once (n=1)."))
 		*limitN = 1
 	}
 
-	// Setup logging (optional, for debugging server internals)
-	// You can pipe this to a file if needed: go run main.go ... >> server.log 2>&1
-	log.SetOutput(io.Discard) // Disable standard logger by default, TUI shows info
-	// log.SetOutput(os.Stderr) // Enable if debugging needed
+	// Setup logging
+	log.SetOutput(io.Discard) // Disable standard logger by default
 
 	// Create and run the Bubble Tea program
-	model := initialModel(filePath)
-	p := tea.NewProgram(model, tea.WithAltScreen()) // Use AltScreen for clean exit
+	model := initialModel(paths)
+	p := tea.NewProgram(&model, tea.WithAltScreen())
 
 	// Run Bubble Tea. This blocks until Quit is received.
 	// Need to use p.Send for channel communication *after* Run starts

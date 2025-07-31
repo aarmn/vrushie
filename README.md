@@ -5,11 +5,13 @@ A cute and simple file server that serves files once or to a limited number of c
 ## ✨ Features
 
 - 🎯 **Simple & Intuitive**: No complex setup - just point to a file and serve!
-- 🔒 **Secure by Default**: Serves files once and shuts down automatically
-- 🎨 **Beautiful TUI**: Gorgeous terminal interface with real-time activity logs
-- 🌐 **Multi-IP Support**: Automatically detects and displays all available network interfaces
-- 🎛️ **Flexible Access Control**: Serve to specific IPs or limit to N unique clients
-- 💝 **Zero Dependencies**: Single executable, no installation required
+- 🔒 **Secure by Default**: Serves files once and shuts down automatically.
+- 🎨 **Beautiful TUI**: Gorgeous terminal interface with real-time activity logs.
+- 🌐 **Public IP Detection**: Automatically detects your public IP for easy sharing over the internet.
+- 📱 **QR Code Display**: Shows a QR code for your public URL for easy mobile downloads.
+- 🗜️ **Archive Streaming**: Serve multiple files or entire directories as a `.zip` or `.tar.gz` on the fly.
+- 🎛️ **Flexible Access Control**: Serve to specific IPs or limit to N unique clients.
+- 💝 **Zero Dependencies**: Single executable, no installation required.
 
 ## 🚀 Quick Start
 
@@ -18,11 +20,14 @@ A cute and simple file server that serves files once or to a limited number of c
 # Serve a file once to the first downloader
 vrushie document.pdf
 
-# Serve to first 3 unique IP addresses
-vrushie -n 3 photo.jpg
+# Serve a whole directory as a .zip archive
+vrushie -z ./my_folder/
 
-# Serve on a specific port
-vrushie -port 8080 video.mp4
+# Serve multiple files as a .tar.gz archive
+vrushie -z --format tar.gz file1.txt image.jpg
+
+# Serve to the first 3 unique IPs on a specific port
+vrushie -n 3 -port 8080 video.mp4
 
 # Only allow specific IP addresses
 vrushie -ips "192.168.1.10,192.168.1.20" secret-file.zip
@@ -45,14 +50,29 @@ vrushie --version   # Version info
 | `--port` | - | Port to listen on (0 for random) | `0` |
 | `--n` | `-n` | Number of downloads allowed | `1` |
 | `--ips` | - | Comma-separated list of allowed IPs | - |
+| `-z` | | Serve multiple files/a directory as an archive | `false` |
+| `--format` | | Archive format to use with -z (zip or tar.gz) | `zip` |
+
 
 ## 🎯 Usage Examples
 
-### 📁 Serve Once (Default)
+### 📁 Serve a Single File
 ```bash
 vrushie my-file.pdf
 ```
 Perfect for sharing files quickly - serves to the first person who downloads it, then shuts down.
+
+### 🗜️ Serve an Entire Directory as a Zip
+```bash
+vrushie -z ./my-project/
+```
+This will package the entire `my-project` directory into an `archive.zip` and serve it.
+
+### 🗜️ Serve Multiple Files as a Tarball
+```bash
+vrushie -z --format tar.gz report.docx chart.xlsx
+```
+This will create an `archive.tar.gz` containing the two specified files.
 
 ### 👥 Serve to Multiple People
 ```bash
@@ -74,43 +94,36 @@ Serves on port 3000 instead of a random port.
 
 ## 🎨 Interface Preview
 
-When you run vrushie server, you'll see a beautiful terminal interface like this:
+When you run vrushie, you'll see a beautiful terminal interface. It automatically detects your public IP for easy sharing!
 
 ```
-╭──────────────────────────────────────────────────────────────╮
-│🌸 Vrushie Server 🌸                                         │
-│                                                              │
-│Serving File: vrushie.exe                                     │
-│Size: 9.2 MiB                                                 │
-│                                                              │
-│Server Ready! ✨✨                                           │
-│Listening on:                                                 │
-│  http://172.26.144.1:59438/                                  │
-│  http://172.19.48.1:59438/                                   │
-│  http://172.19.16.1:59438/                                   │
-│  http://192.168.26.25:59438/                                 │
-│  http://192.168.177.1:59438/                                 │
-│  http://192.168.137.1:59438/                                 │
-│  http://192.168.56.1:59438/                                  │
-│  http://192.168.56.2:59438/                                  │
-│  http://10.8.1.2:59438/                                      │
-│  http://10.0.0.1:59438/                                      │
-│  http://127.0.0.1:59438/                                     │
-│                                                              │
-│Access Mode: Serve once to first successful download          │
-│                                                              │
-│Activity Log:                                                 │
-│  No activity yet...                                          │
-│                                                              │
-│                                                              │
-│Press 'q' or Ctrl+C to shut down manually.                    │
-╰──────────────────────────────────────────────────────────────╯
+╭───────────────────────────────────────────────────────────────────────────╮
+│🌸 Vrushie Server 🌸                                                      │
+│                                                                           │
+│Serving File: my-file.zip                                                  │
+│Size: 9.2 MiB                                                              │
+│                                                                           │
+│Server Ready! ✨✨                                                        │
+│Listening on:                                                              │
+│🌐 http://123.45.67.89:59438/   <-- Your Public IP!                        │
+│   http://192.168.1.10:59438/                                              │
+│   http://127.0.0.1:59438/                                                 │
+│                                                                           │
+│Access Mode: Serve once to first successful download                       │
+│                                                                           │
+│Activity Log:                                                              │
+│  No activity yet...                                                       │
+│                                                                           │
+│                                                                           │
+│Press 'q' or Ctrl+C to shut down manually.                                 │
+╰───────────────────────────────────────────────────────────────────────────╯
 ```
+*On wide terminals, a QR code will be displayed for easy scanning with a mobile device!*
 
 ## 🛠️ Installation
 
 ### Download Binary
-1. Download the latest release from the releases page
+1. Download the latest release from the [releases page](https://github.com/aarmn/vrushie/releases)
 2. Make it executable: `chmod +x vrushie`
 3. Run it: `./vrushie your-file.txt`
 
@@ -153,9 +166,15 @@ Vrushie automatically detects all available network interfaces and displays URLs
 
 ## ✅ Todo
 
-- [ ] Add multiple file hosting, and to pack as tar, zip, ... (also for folders)
-- [ ] Share on specific IPs and interactive select endpoints
-- [ ] Ensure When its ends
+- [ ] **RAR Support**: Add the ability to create and serve `.rar` archives.
+- [ ] **Password Protection**: Add an optional flag to protect archives with a user-provided password.
+- [ ] **Advanced Flag Handling**: Investigate making `-z` an optionally valued flag (e.g., `-z zip`).
+- [ ] **Storage Options**: Add a flag to select between streaming from RAM (current) or using a temporary folder for large archives.
+- [ ] **URL Helpers**: Add features like URL shortening or better guidance for users behind a NAT. (Push based)
+- [ ] **Host as folder**: Host a folder recursively!
+- [ ] **Time limit**: Limit the time of hosting, after which, the server will self-destruct (hard and soft mode, to not self destruct while a user is downloading, if time is given, and no user count, default to time only, infinite user)
+- [ ] **Select IPs**: Share on specific IPs with interactive selection of endpoints, instead of all end-points
+- [ ] **End with Download**: Ensure the program quits at the same time as the last user download ends
 - [ ] Show the progress of download if possible
 
 ## 🤝 Contributing
@@ -174,7 +193,7 @@ MIT License - feel free to use Vrushie in your projects!
 
 ## 💖 Why Vrushie?
 
-Sometimes you just need to share a file quickly without setting up complex servers or dealing with cloud uploads. Vrushie makes file sharing as simple as pointing to a file and watching the magic happen in your terminal! 
+Sometimes you just need to share a file quickly without setting up complex servers or dealing with cloud uploads. Vrushie makes file sharing as simple as pointing to a file and watching the magic happen in your terminal!
 
 Perfect for:
 - 📊 Sharing presentations in meetings
@@ -185,4 +204,4 @@ Perfect for:
 
 ---
 
-Made with 💝 and ✨ as AARMN The Limitless by Gemini 2.5 pro and Claude 4 Sonnet!
+Made with 💝 and ✨ as AARMN The Limitless by Gemini 2.5 pro and Claude 4 Sonnet! (and *Jules* now)
