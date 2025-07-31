@@ -157,11 +157,11 @@ func initialModel(paths []string) model {
 	return m
 }
 
-func (m model) Init() tea.Cmd {
+func (m *model) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, m.startServer())
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -840,7 +840,7 @@ func main() {
 
 	// Create and run the Bubble Tea program
 	model := initialModel(paths)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(&model, tea.WithAltScreen())
 
 	// Run Bubble Tea. This blocks until Quit is received.
 	// Need to use p.Send for channel communication *after* Run starts
