@@ -25,7 +25,7 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 )
 
-const version = "1.0.2"
+const version = "1.1.0"
 
 // --- Configuration ---
 var (
@@ -251,9 +251,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-const qrCodeMinWidth = 120 // Min terminal width to show QR code
-
-func (m model) View() string {
+func (m *model) View() string {
 	if m.quitting && m.lastError == nil {
 		return styleSuccess.Render("\nServer shut down gracefully. Bye! ♡\n\n")
 	}
@@ -270,7 +268,9 @@ func (m model) View() string {
 		leftPanel.WriteString(fmt.Sprintf("Contents: %s\n", styleSubtle.Render(strings.Join(m.paths, ", "))))
 	} else {
 		leftPanel.WriteString(fmt.Sprintf("Serving File: %s\n", styleSecondary.Render(m.fileName)))
-		leftPanel.WriteString(fmt.Sprintf("Size: %s\n", styleSubtle.Render(formatBytes(m.fileSize))))
+		if m.fileSize >= 0 {
+			leftPanel.WriteString(fmt.Sprintf("Size: %s\n", styleSubtle.Render(formatBytes(m.fileSize))))
+		}
 	}
 	leftPanel.WriteString("\n")
 
@@ -326,23 +326,23 @@ func (m model) View() string {
 			))
 		}
 	}
+	leftPanelStr := leftPanel.String()
 
 	// --- Right Panel (QR Code) ---
-	var rightPanel string
-	if m.width >= qrCodeMinWidth && m.qrCode != "" {
+	rightPanelStr := ""
+	if m.qrCode != "" {
 		qrStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder(), true).
 			BorderForeground(stylePrimary.GetForeground()).
 			Padding(1)
-		rightPanel = qrStyle.Render(m.qrCode)
+		rightPanelStr = qrStyle.Render(m.qrCode)
 	}
 
 	// --- Combine Panels ---
-	var mainContent string
-	if rightPanel != "" {
-		mainContent = lipgloss.JoinHorizontal(lipgloss.Top, leftPanel.String(), rightPanel)
-	} else {
-		mainContent = leftPanel.String()
+	mainContent := leftPanelStr
+	// Check if there's enough space for a side-by-side layout
+	if rightPanelStr != "" && lipgloss.Width(leftPanelStr)+lipgloss.Width(rightPanelStr) < m.width {
+		mainContent = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelStr, rightPanelStr)
 	}
 
 	// --- Footer ---
